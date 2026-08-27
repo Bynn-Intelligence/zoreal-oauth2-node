@@ -59,7 +59,7 @@ jobs:
           git add package.json package-lock.json
           git commit -m "Release v${{ steps.bump.outputs.version }} [skip publish]"
           git tag "v${{ steps.bump.outputs.version }}"
-          git push origin HEAD:main --follow-tags
+          git push origin HEAD:main "v${{ steps.bump.outputs.version }}"
 
       - run: npm publish --provenance --access public
         env:
