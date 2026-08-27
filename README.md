@@ -26,6 +26,42 @@ Node.js >= 18 (the built-in `fetch` is the transport). One dependency:
 [`jose`](https://github.com/panva/jose). ESM and CommonJS builds ship, with
 types.
 
+## Getting your credentials
+
+Everything the client constructor needs comes from a ZOREAL **asset**.
+
+1. Create an account at **https://zoreal.com** and open **Assets**.
+2. **Create an asset** — a *website* (a domain you own) or an *app bundle* (a
+   reverse-DNS bundle id). An asset is the thing users log in to; its token is
+   your `clientId` and it looks like `ast_...`.
+3. On the asset, open the **OAuth2** tab and set:
+   - the **redirect URIs** and **JavaScript origins** your app uses (requests
+     from anything not registered are rejected — this is the core control),
+   - the **scopes** the client is allowed to request (see the catalogue below),
+   - your **client authentication**: generate a **client secret**
+     (`client_secret_basic`), or register a **JWKS** for `private_key_jwt`. A
+     public client authenticates with PKCE alone and no secret.
+4. A website asset must **verify its domain** (a DNS or meta-tag proof, shown in
+   the dashboard) before it can request personal-data scopes or sign users in;
+   the verified domain is what your users' `sub` is pairwise against.
+
+The `clientId` is public — it ships in your frontend. The client secret is not:
+keep it in your server's secret store (an environment variable, a secrets
+manager), never in the browser.
+
+### There is no test-identity sandbox — and that is deliberate
+
+ZOREAL **never issues fake or sandbox humans**: a pool of test identities would
+be a fraud vector against the exact thing the product proves. So you always
+authenticate **real** ZOREAL IDs.
+
+To develop and test, **create a free ZOREAL ID for yourself** (enrol in the
+ZOREAL ID app) and sign in with it. Mark your asset's environment **sandbox**
+in the dashboard while building — a sandbox asset may register
+`http://localhost` origins and redirect URIs that a production asset may not —
+and flip it to production when you ship. The identities are real either way;
+only the allowed origins differ.
+
 ## Quick start
 
 Build one client at boot and share it; it is safe to use concurrently.
@@ -188,33 +224,8 @@ basis, the `verified_on` month, whether chip liveness was proven
 (`chip_liveness_proven`), the `trust_tier`, and the device's `key_protection`.
 One is about now; the other is about who they are. A high-value flow usually
 wants both: `acr: 'zoreal.live'` for presence, and the assurance block for the
-strength of the underlying identity proofing.
-
-## What each call does
-
-| Call | What happens |
-|---|---|
-| `authenticate(code, codeVerifier, options?)` | `exchange` + `verifyIdToken`, returns a `Login` |
-| `exchange(code, codeVerifier)` | `POST {issuer}/token` with your client authentication |
-| `verifyIdToken(jwt, options?)` | ES256 against `{issuer}/jwks`, checks `iss`, `aud`, `exp`, plus `nonce` and the `acr` floor when given |
-| `userinfo(accessToken)` | `GET {issuer}/userinfo` with the Bearer token |
-| `login.userinfo()` | the above, once, memoized; `{}` when there is no access token |
-
-`options` is the nonce string alone — the common case, as in the quick start —
-or `{ nonce?, acr? }`.
-
-`Login` also carries `sub`, `acr`, `live`, `satisfiesAcr(required)`, `amr`,
-`assurance`, `ageOver(threshold)`,
-`nationality`, `claims`, `idToken`, `accessToken` and `scope`, plus async
-accessors for every `/userinfo` claim: `email()`, `emailVerified()`, `name()`,
-`givenName()`, `familyName()`, `birthdate()`, `documentType()`,
-`documentNumber()`, `issuingCountry()`, `documentExpiresOn()`, `portrait()`.
-
-Errors: `ConfigurationError`, `ExchangeError` (carries the provider's OAuth
-error code, its reason verbatim, and the HTTP status), `VerificationError`,
-`UserinfoError`. A returning user matched on `sub` can survive a caught
-`UserinfoError`; a signup that needs the email cannot. No token value ever
-appears in an error message.
+strength of the underlying identity proofing. Its full schema is in
+[The assurance block](#the-assurance-block) below.
 
 ## Client authentication
 
@@ -250,6 +261,177 @@ certificate and key are applied through [undici](https://github.com/nodejs/undic
 `Agent`, so `undici` is an optional peer dependency you install only for this
 method: `npm install undici`. The other three methods never load it.
 
+## What each call does
+
+| Call | What happens |
+|---|---|
+| `authenticate(code, codeVerifier, options?)` | `exchange` + `verifyIdToken`, returns a `Login` |
+| `exchange(code, codeVerifier)` | `POST {issuer}/token` with your client authentication |
+| `verifyIdToken(jwt, options?)` | ES256 against `{issuer}/jwks`, checks `iss`, `aud`, `exp`, plus `nonce` and the `acr` floor when given |
+| `userinfo(accessToken)` | `GET {issuer}/userinfo` with the Bearer token |
+| `login.userinfo()` | the above, once, memoized; `{}` when there is no access token |
+
+`options` is the nonce string alone — the common case, as in the quick start —
+or `{ nonce?, acr? }`.
+
+`Login` also carries `sub`, `acr`, `live`, `satisfiesAcr(required)`, `amr`,
+`assurance`, `ageOver(threshold)`,
+`nationality`, `claims`, `idToken`, `accessToken` and `scope`, plus async
+accessors for every `/userinfo` claim: `email()`, `emailVerified()`, `name()`,
+`givenName()`, `familyName()`, `birthdate()`, `documentType()`,
+`documentNumber()`, `issuingCountry()`, `documentExpiresOn()`, `portrait()`.
+
+## Scopes and claims
+
+Scopes are requested in the **frontend** (the SDK's `scope` string, always
+starting with `openid`), consented to by the holder, and pre-authorized on your
+asset. What each grants and where it is delivered:
+
+| Scope | Claims | Delivered in | Tier | Requires |
+|---|---|---|---|---|
+| `openid` | `sub`, `iss`, `aud`, `exp`, `iat`, `nonce`, `auth_time`, `acr`, `amr`, and the assurance block | ID token | A | any client |
+| `zoreal.age` | `age_over_13/16/18/21/65` booleans — only the thresholds you registered, never an age or birthdate | ID token | A | any client |
+| `zoreal.nationality` | `nationality` (ISO 3166-1 alpha-3) | ID token | A | any client |
+| `email` | `email`, `email_verified` | `/userinfo` | B | confidential client + verified domain |
+| `profile.name` | `name`, `given_name`, `family_name` | `/userinfo` | B | confidential client + verified domain |
+| `profile.birthdate` | `birthdate` (full ISO 8601 date) | `/userinfo` | B | confidential client + verified domain |
+| `profile.document` | `document_type`, `document_number`, `issuing_country`, `document_expires_on` | `/userinfo` | B | confidential client + verified domain |
+| `profile.portrait` | `portrait` (the chip's facial image; GDPR Article 9 data) | `/userinfo` | C | confidential client + verified domain — *registrable but not served yet* |
+
+- **Tier A** rides in the ID token and is available to every client, so the
+  no-backend browser button can use it. Read it straight off the `Login`:
+  `login.sub`, `login.acr`, `login.amr`, `login.assurance`,
+  `login.ageOver(18)`, `login.nationality`.
+- **Tier B and C** are personal data, served only from `/userinfo` to a
+  confidential client on a domain you have verified, and never placed in a
+  browser token. They arrive through the async accessors — `await
+  login.email()`, `await login.name()`, and the rest — each of which reads
+  `/userinfo` once and memoizes it.
+- **Age thresholds are a fixed set** — 13, 16, 18, 21, 65 — that you register on
+  the asset. `login.ageOver(n)` returns `undefined` for a threshold you did not
+  register (no claim was minted), which is different from `false`.
+
+## Error reference
+
+`exchange` / `authenticate` reject with `ExchangeError`, which carries the
+provider's own `oauthError` code and `description` verbatim (and the HTTP
+`status` when there was a response). What you will actually see:
+
+| `oauthError` | Cause | Retryable? |
+|---|---|---|
+| `invalid_grant` | The code is spent — unknown, expired (60s), already used, PKCE mismatch, or the asset's domain verification lapsed mid-flow | No. Start a **new** login; the code cannot be reused |
+| `invalid_request` | Client authentication failed — wrong secret, a bad `private_key_jwt` assertion, or `tls_client_auth` (not accepted at `/token` yet) | No. Fix your client configuration |
+| `unsupported_grant_type` | Something other than `authorization_code` reached `/token` | No. A bug |
+
+Errors that surface in the **frontend** instead, before your backend is
+involved (from the SDK's `onError` / `onNonOAuthError`), so handle them there:
+
+| Where | Code | Meaning |
+|---|---|---|
+| `/pair` | `invalid_scope` | A scope not on the asset's allowed list, or a Tier B scope from a public client |
+| `/pair` | `invalid_request` | Missing PKCE/nonce, an unverified sector, an unregistered `redirect_uri`, or an unknown `acr_values` |
+| `/pair` | `login_required` | `prompt=none` with no silent session to resume — the expected quiet outcome, not a failure |
+| pairing | `request_denied` | The holder declined in their ZOREAL ID app — **not an error to alarm on**; offer to try again |
+| pairing | `request_expired` | The pairing window elapsed, or a required liveness the device could not meet — offer to try again |
+
+`request_denied` is a person choosing not to log in, not a fault: treat it as a
+cancel — keep the button where it is and let them try again. It never reaches
+your backend, so there is nothing to catch here for it.
+
+This package's own classes, all extending `ZorealOAuth2Error`:
+
+| Class | Thrown when | Extra fields |
+|---|---|---|
+| `ConfigurationError` | You built the client wrong, or asked to verify an `acr` outside the vocabulary — a bug in your code, not a bad token | — |
+| `ExchangeError` | The provider refused the code exchange | `oauthError`, `description`, `status?` |
+| `VerificationError` | The ID token did not verify: signature, `iss`, `aud`, `exp`, `nonce`, or the `acr` floor | — |
+| `UserinfoError` | The `/userinfo` read failed | `status?` |
+
+A returning user matched on `sub` can survive a caught `UserinfoError`; a signup
+that needs the email cannot. No token value ever appears in an error message.
+
+## The assurance block
+
+`login.assurance` is the ID token's `zoreal` claim (typed `ZorealAssurance`) — a
+description of the strength of the *identity* behind this login, distinct from
+`acr`, which grades the *login event*. Its keys and their value sets:
+
+| Key | Values | Meaning |
+|---|---|---|
+| `uniqueness` | `personal_number` \| `document` \| `none` | The anchor the holder is deduplicated on. `personal_number` (a national number from the chip) is strongest; `none` means no reliable anchor |
+| `verified_on` | `"YYYY-MM"` | The month the underlying document was verified. Quantised to a month on purpose — a day-precision date is a cross-site correlator |
+| `chip_liveness_proven` | `true` \| `false` | Whether the passport chip's active-authentication challenge was proven (a genuine chip, not a clone) |
+| `trust_tier` | `high` \| `standard` | `high` when `chip_liveness_proven`, else `standard` |
+| `key_protection` | `secure_enclave` \| `strongbox` \| `tee` \| `software` | How the holder's device key is protected. `software` means no hardware attestation |
+
+`acr` grades the login event; the assurance block grades the identity. A
+high-value flow usually pairs the two — `acr: 'zoreal.live'` for fresh presence,
+and an assurance-block check for identity strength:
+
+```ts
+const login = await zoreal.authenticate(code, code_verifier, {
+  nonce,
+  acr: 'zoreal.live',
+});
+
+const { uniqueness, trust_tier } = login.assurance ?? {};
+if (uniqueness !== 'personal_number' || trust_tier !== 'high') {
+  // strong enough to sign in, not strong enough for THIS action: step up or refuse
+}
+```
+
+## A complete example
+
+An Express handler, end to end — the shape a real integration takes.
+
+```ts
+import { ExchangeError, VerificationError, UserinfoError } from '@zoreal/oauth2-node';
+import { zoreal } from './zoreal'; // the client built once at boot, from Quick start
+
+// Your frontend's <ZorealLogin onSuccess> posts { code, code_verifier, nonce }
+// here over your own TLS. Protect THIS route with your framework's normal CSRF /
+// same-origin defence, exactly as you would any login endpoint — the ZOREAL
+// nonce protects the token, not your route.
+app.post('/api/auth/zoreal', async (req, res) => {
+  const { code, code_verifier, nonce } = req.body;
+
+  try {
+    const login = await zoreal.authenticate(code, code_verifier, nonce);
+    // pass { nonce, acr: 'zoreal.live' } instead for a step-up / high-value login
+
+    let user = await users.findBy({ provider: 'zoreal', uid: login.sub });
+    if (!user) {
+      // A subject we have not seen. A signup needs personal data, so a
+      // UserinfoError here is fatal — the returning path above never reaches it.
+      const email = (await login.emailVerified()) ? await login.email() : undefined;
+      // Claim an existing account that owns this verified email rather than
+      // colliding on the unique index; otherwise create one.
+      if (email) user = await users.findBy({ email });
+      user ??= await users.create({ email, fullName: await login.name() });
+      await users.update(user, { provider: 'zoreal', uid: login.sub });
+    }
+
+    // Session-fixation defence: a fresh session id on privilege change.
+    await new Promise<void>((resolve, reject) =>
+      req.session.regenerate((err: unknown) => (err ? reject(err) : resolve())),
+    );
+    req.session.userId = user.id;
+    res.json({ ok: true });
+  } catch (error) {
+    if (error instanceof ExchangeError || error instanceof VerificationError) {
+      // A spent code or a token that did not verify: the login must be restarted.
+      return res.status(401).json({ error: 'sign_in_failed' });
+    }
+    if (error instanceof UserinfoError) {
+      // Personal data was unreachable. Fine for a returning user matched on sub;
+      // fatal for a signup that needs the email, as here.
+      return res.status(401).json({ error: 'sign_in_failed' });
+    }
+    throw error; // an unexpected error is not a failed login; let it surface
+  }
+});
+```
+
 ## Things worth knowing before you integrate
 
 - **The ID token never carries personal data.** `sub`, timing, `acr`/`amr`,
@@ -263,23 +445,29 @@ method: `npm install undici`. The other three methods never load it.
   rotates every `sub` you have stored. Plan domain changes as a migration.
 - **ES256 only.** The provider signs ID tokens with nothing else, and this
   package refuses other algorithms rather than negotiating.
-- **Always pass the nonce through.** The SDK generates it and gives it to
-  your frontend in `onSuccess`; without it your backend cannot tell a
-  substituted ID token from the real one.
 - **Email is a deliberate choice.** It is a Tier B scope precisely because a
   shared email defeats the unlinkability the pairwise `sub` provides. Request
   it because you need it, not because the checkbox is familiar.
-- **Sandbox clients accept localhost origins; production clients do not.**
-  Registration lives in the ZOREAL dashboard on the asset's OAuth2 tab; Tier B
-  scopes (email, profile.\*) need a confidential client on a verified domain.
 - **`profile.portrait` is registrable but not served yet.** The `portrait()`
   accessor exists so the integration is written once; it resolves `undefined`
   until the provider ships the claim.
 
-## Development against a local provider
+## Security
 
-Point `issuer` at your provider instance. The issuer value must match the
-`iss` inside the tokens exactly — it is compared, not normalized.
+- **Always pass the nonce through, and protect your own endpoint too.** The SDK
+  generates the nonce and hands it to your frontend in `onSuccess`; passing it
+  to `authenticate` lets this package confirm the ID token was minted for *this*
+  login rather than substituted. Two things the nonce does **not** do: it is not
+  your endpoint's CSRF token — protect your `/api/auth/zoreal` route with your
+  framework's normal CSRF / same-origin defence — and PKCE, not the nonce, is
+  what proves whoever exchanges the code is whoever started the flow.
+- **PKCE is mandatory and already handled.** The browser SDK generates the
+  verifier and challenge; your frontend forwards the `code_verifier`, and
+  `exchange` presents it. There is no plain, non-PKCE path to fall back to.
+- **The `issuer` must match the token's `iss` exactly.** It is compared as a
+  string, not normalized. Production is `https://id.zoreal.com`; set `issuer`
+  to anything else only when you were handed a non-production provider URL to
+  point at, and make it match that provider's `iss` character for character.
 
 ## The ZOREAL OAuth2 library family
 
