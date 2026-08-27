@@ -9,6 +9,14 @@
 export type AcrValue = 'zoreal.live' | 'zoreal.device' | 'zoreal.session';
 
 /**
+ * A required assurance value, as callers write one: the known vocabulary is
+ * suggested, and any other string is accepted at the type level so a value
+ * read from configuration flows through. Verification refuses an unknown
+ * requirement at runtime with ConfigurationError.
+ */
+export type RequiredAcr = AcrValue | (string & {});
+
+/**
  * The assurance block from the `zoreal` claim: uniqueness basis, verification
  * month, chip liveness, trust tier, key protection.
  */

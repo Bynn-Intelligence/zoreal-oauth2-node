@@ -1,5 +1,6 @@
 export { ZorealOAuth2Client, DEFAULT_ISSUER } from './client';
-export type { ZorealOAuth2ClientOptions, FetchLike } from './client';
+export type { ZorealOAuth2ClientOptions, FetchLike, VerificationOptions } from './client';
+export { ACR_ORDER } from './acr';
 export { Login } from './login';
 export type { ClientAuth, PrivateKeyInput } from './auth';
 export {
@@ -12,6 +13,7 @@ export {
 export type {
   AcrValue,
   IdTokenClaims,
+  RequiredAcr,
   TokenResponse,
   UserinfoClaims,
   ZorealAssurance,

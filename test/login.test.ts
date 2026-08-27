@@ -33,6 +33,20 @@ describe('Login', () => {
     expect(login.assurance?.trust_tier).toBe('high');
   });
 
+  it('reads the assurance ordering through live and satisfiesAcr', () => {
+    const fetch = stubFetch(() => json({}));
+
+    const live = loginWith(fetch, undefined, { acr: 'zoreal.live' });
+    expect(live.live).toBe(true);
+    expect(live.satisfiesAcr('zoreal.device')).toBe(true);
+    // Unknown values satisfy nothing: a predicate answers, it never throws.
+    expect(live.satisfiesAcr('made.up')).toBe(false);
+
+    const device = loginWith(fetch, undefined, { acr: 'zoreal.device' });
+    expect(device.live).toBe(false);
+    expect(device.satisfiesAcr('zoreal.live')).toBe(false);
+  });
+
   it('resolves userinfo to an empty object when there is no access token, never fetching', async () => {
     const fetch = stubFetch(() => json({}));
     const login = loginWith(fetch, undefined);

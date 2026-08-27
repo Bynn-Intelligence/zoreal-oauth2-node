@@ -1,5 +1,6 @@
+import { acrRank } from './acr';
 import type { ZorealOAuth2Client } from './client';
-import type { AcrValue, IdTokenClaims, UserinfoClaims, ZorealAssurance } from './types';
+import type { AcrValue, IdTokenClaims, RequiredAcr, UserinfoClaims, ZorealAssurance } from './types';
 
 /**
  * One verified login. The ID token claims are already checked when this
@@ -48,6 +49,26 @@ export class Login {
    */
   get acr(): AcrValue | undefined {
     return this.claims.acr;
+  }
+
+  /**
+   * A fresh liveness capture backed this login. The convenience spelling of
+   * acr === 'zoreal.live'; for enforcement, pass `acr` to authenticate and
+   * let verification refuse the token instead of checking after.
+   */
+  get live(): boolean {
+    return this.acr === 'zoreal.live';
+  }
+
+  /**
+   * Equal or stronger satisfies, on the client's ordering
+   * (zoreal.session < zoreal.device < zoreal.live). Unknown values satisfy
+   * nothing.
+   */
+  satisfiesAcr(required: RequiredAcr): boolean {
+    const actual = acrRank(this.acr);
+    const wanted = acrRank(required);
+    return actual !== undefined && wanted !== undefined && actual >= wanted;
   }
 
   get amr(): string[] | undefined {

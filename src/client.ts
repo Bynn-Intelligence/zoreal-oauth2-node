@@ -1,9 +1,10 @@
 import { createLocalJWKSet, jwtVerify, errors as joseErrors } from 'jose';
-import type { JSONWebKeySet } from 'jose';
+import type { JSONWebKeySet, JWTPayload } from 'jose';
+import { ACR_ORDER, acrRank } from './acr';
 import { buildClientAssertion, type ClientAuth } from './auth';
 import { ConfigurationError, ExchangeError, UserinfoError, VerificationError } from './errors';
 import { Login } from './login';
-import type { IdTokenClaims, TokenResponse, UserinfoClaims } from './types';
+import type { IdTokenClaims, RequiredAcr, TokenResponse, UserinfoClaims } from './types';
 
 export const DEFAULT_ISSUER = 'https://id.zoreal.com';
 
@@ -34,6 +35,24 @@ export interface ZorealOAuth2ClientOptions {
   timeoutMs?: number;
   /** Replaces the transport for every provider call. The test seam. */
   fetch?: FetchLike;
+}
+
+/**
+ * The optional checks on top of signature, issuer, audience and expiry.
+ * `authenticate` and `verifyIdToken` take these as their trailing argument;
+ * the plain nonce string form remains for callers that need nothing else.
+ */
+export interface VerificationOptions {
+  /** The nonce the SDK generated for this login; the binding is checked when given. */
+  nonce?: string;
+  /**
+   * The assurance floor. When given, the token's `acr` claim must be this
+   * value or stronger (zoreal.session < zoreal.device < zoreal.live), or
+   * verification rejects with VerificationError. An unknown value HERE throws
+   * ConfigurationError instead: that is a typo in the caller's code, not a
+   * bad token.
+   */
+  acr?: RequiredAcr;
 }
 
 /**
@@ -75,13 +94,25 @@ export class ZorealOAuth2Client {
   /**
    * The whole login, in order: exchange the code (with the PKCE verifier the
    * browser SDK handed over), verify the ID token against the JWKS, check the
-   * nonce when the caller has it. Returns a Login; personal data is NOT
+   * nonce when the caller has it, and — when the caller passes `acr` — refuse
+   * a token whose assurance is below it. The trailing argument is the nonce
+   * string alone or `{ nonce, acr }`. Returns a Login; personal data is NOT
    * fetched here, because the ID token never carries it and not every caller
    * wants it — login.userinfo() fetches on first use.
+   *
+   * REQUESTING an assurance on the wire (the SDK's acr_values) is advisory;
+   * the signed acr claim is the proof, and the `acr` option is where a
+   * relying party that asked for a liveness check verifies it actually
+   * happened. An RP that requires zoreal.live and never passes `acr` here has
+   * checked nothing.
    */
-  async authenticate(code: string, codeVerifier: string, nonce?: string): Promise<Login> {
+  async authenticate(
+    code: string,
+    codeVerifier: string,
+    options?: string | VerificationOptions
+  ): Promise<Login> {
     const tokens = await this.exchange(code, codeVerifier);
-    const claims = await this.verifyIdToken(tokens.id_token, nonce);
+    const claims = await this.verifyIdToken(tokens.id_token, options);
     return new Login({
       client: this,
       claims,
@@ -159,13 +190,16 @@ export class ZorealOAuth2Client {
 
   /**
    * ES256 against the provider's JWKS, plus iss (exact string equality), aud,
-   * exp and — when the caller passes the nonce the SDK generated — the nonce
-   * binding. Returns the claims. There is no RS256 fallback on purpose:
-   * ZOREAL signs ID tokens with nothing else, and accepting a second
-   * algorithm is how algorithm confusion starts.
+   * exp, the nonce binding when the caller passes the nonce the SDK
+   * generated, and the assurance floor when the caller passes `acr`. The
+   * trailing argument is the nonce string alone or `{ nonce, acr }`. Returns
+   * the claims. There is no RS256 fallback on purpose: ZOREAL signs ID tokens
+   * with nothing else, and accepting a second algorithm is how algorithm
+   * confusion starts.
    */
-  async verifyIdToken(idToken: string, nonce?: string): Promise<IdTokenClaims> {
+  async verifyIdToken(idToken: string, options?: string | VerificationOptions): Promise<IdTokenClaims> {
     if (isBlank(idToken)) throw new VerificationError('an ID token is required');
+    const { nonce, acr } = toVerificationOptions(options);
 
     let payload;
     try {
@@ -188,6 +222,7 @@ export class ZorealOAuth2Client {
     if (!isBlank(nonce) && payload.nonce !== nonce) {
       throw new VerificationError('the ID token nonce is not the one this login started with');
     }
+    if (acr !== undefined && !isBlank(acr)) this.verifyAcr(payload, acr);
     return payload as IdTokenClaims;
   }
 
@@ -217,6 +252,28 @@ export class ZorealOAuth2Client {
       );
     }
     return body as UserinfoClaims;
+  }
+
+  /**
+   * Equal or stronger satisfies; anything else — weaker, missing, or a value
+   * outside the vocabulary — is refused. An unknown REQUIREMENT is a caller
+   * bug and says so plainly rather than failing every login.
+   */
+  private verifyAcr(claims: JWTPayload, required: string): void {
+    const requiredRank = acrRank(required);
+    if (requiredRank === undefined) {
+      throw new ConfigurationError(
+        `unknown required acr ${required}; supported: ${Object.keys(ACR_ORDER).join(', ')}`
+      );
+    }
+    const actual = claims.acr;
+    const actualRank = acrRank(actual);
+    if (actualRank !== undefined && actualRank >= requiredRank) return;
+    throw new VerificationError(
+      typeof actual === 'string'
+        ? `the ID token says acr ${JSON.stringify(actual)}, below the required ${required}`
+        : `the ID token carries no acr, and ${required} is required`
+    );
   }
 
   private async verifyAgainst(keys: JSONWebKeySet, idToken: string) {
@@ -316,6 +373,12 @@ function validateAuth(auth: ClientAuth): void {
         `unknown client authentication method ${(auth as { method: string }).method}`
       );
   }
+}
+
+function toVerificationOptions(value: string | VerificationOptions | undefined): VerificationOptions {
+  // The trailing argument kept its original form — the nonce alone — and
+  // grew the options object when acr arrived. Both mean the same thing.
+  return typeof value === 'string' ? { nonce: value } : value ?? {};
 }
 
 function asVerificationError(error: unknown): Error {
