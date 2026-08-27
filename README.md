@@ -471,6 +471,17 @@ app.post('/api/auth/zoreal', async (req, res) => {
   to anything else only when you were handed a non-production provider URL to
   point at, and make it match that provider's `iss` character for character.
 
+## Verifying this release
+
+Every version is published from GitHub Actions with [npm provenance](https://docs.npmjs.com/generating-provenance-statements): the package page on npmjs.com carries a **Provenance** panel linking the exact commit and workflow run that built the tarball, signed through [Sigstore](https://www.sigstore.dev/) and recorded in its public transparency log. No long-lived npm token stands behind it — the workflow authenticates by OIDC ([trusted publishing](https://docs.npmjs.com/trusted-publishers)), so a leaked CI secret cannot cut a release.
+
+Check the signatures on what you actually installed:
+
+```sh
+npm install @zoreal/oauth2-node
+npm audit signatures
+```
+
 ## The ZOREAL OAuth2 library family
 
 | Repository | Package | Role |
