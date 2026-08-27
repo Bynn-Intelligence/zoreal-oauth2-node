@@ -1,0 +1,62 @@
+{
+  "name": "@zoreal/oauth2-node",
+  "version": "0.1.0",
+  "description": "Login with ZOREAL for Node.js backends: exchanges the authorization code your frontend received from @zoreal/oauth2-react, verifies the ID token against the provider's JWKS, and reads personal claims from /userinfo.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Bynn-Intelligence/zoreal-oauth2-node.git"
+  },
+  "homepage": "https://zoreal.com",
+  "keywords": [
+    "zoreal",
+    "oauth2",
+    "oidc",
+    "node",
+    "backend",
+    "login",
+    "identity",
+    "liveness"
+  ],
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "jose": "^5.9.6"
+  },
+  "peerDependencies": {
+    "undici": ">=6"
+  },
+  "peerDependenciesMeta": {
+    "undici": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsup": "^8.3.0",
+    "typescript": "^5.7.0",
+    "undici": "^6.21.0",
+    "vitest": "^3.0.0"
+  }
+}
